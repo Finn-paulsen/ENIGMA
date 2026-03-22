@@ -426,8 +426,10 @@ function Show-PasswordDialog {
     $btnCancel.DialogResult = 'Cancel'
     $dlg.CancelButton       = $btnCancel
 
+    $fnPasswordStrength = ${function:Get-PasswordStrengthInfo}
+
     $updateStrength = {
-        $info = Get-PasswordStrengthInfo -Password $txt.Text
+        $info = & $fnPasswordStrength -Password $txt.Text
         $lblStrength.Text = "Qualitaet: $($info.Label)"
         $lblStrength.ForeColor = $info.Color
         $bar.Value = [math]::Max($bar.Minimum, [math]::Min($bar.Maximum, $info.Score))
