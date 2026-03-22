@@ -168,7 +168,10 @@ function Save-RecoveryInfo {
 }
 
 function Encrypt-Drive {
-    param([string]$Letter)
+    param(
+        [string]$Letter,
+        [System.Security.SecureString]$Password = $null
+    )
 
     if ([string]::IsNullOrWhiteSpace($Letter)) {
         $Letter = Prompt-DriveLetter -Prompt 'Laufwerksbuchstabe fuer Verschluesselung'
@@ -186,8 +189,10 @@ function Encrypt-Drive {
         Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest
     }
     else {
-        $securePassword = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
-        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $securePassword
+        if ($null -eq $Password) {
+            $Password = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
+        }
+        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $Password
     }
 
     $recovery = Add-RecoveryPasswordProtector -MountPoint $mountPoint
@@ -197,7 +202,10 @@ function Encrypt-Drive {
 }
 
 function Unlock-Drive {
-    param([string]$Letter)
+    param(
+        [string]$Letter,
+        [System.Security.SecureString]$Password = $null
+    )
 
     if ([string]::IsNullOrWhiteSpace($Letter)) {
         $Letter = Prompt-DriveLetter -Prompt 'Laufwerksbuchstabe zum Entsperren'
@@ -205,8 +213,10 @@ function Unlock-Drive {
 
     $mountPoint = Get-MountPoint -Letter $Letter
 
-    $securePassword = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
-    Unlock-BitLocker -MountPoint $mountPoint -Password $securePassword
+    if ($null -eq $Password) {
+        $Password = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
+    }
+    Unlock-BitLocker -MountPoint $mountPoint -Password $Password
     Write-Host "Laufwerk entsperrt: $mountPoint"
 }
 
@@ -277,6 +287,51 @@ function Start-InteractiveMenu {
     }
 }
 
+function Show-PasswordDialog {
+    param([string]$Headline = 'Passwort eingeben', [string]$DriveLabel = '')
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.Text            = "ENIGMA  -  $Headline"
+    $dlg.Size            = New-Object System.Drawing.Size(380, 180)
+    $dlg.StartPosition   = 'CenterScreen'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox     = $false
+    $dlg.MinimizeBox     = $false
+    $dlg.BackColor       = [System.Drawing.Color]::FromArgb(212, 208, 200)
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Text     = if ($DriveLabel) { "Passwort fuer Laufwerk ${DriveLabel}:" } else { 'Passwort:' }
+    $lbl.Location = New-Object System.Drawing.Point(12, 18)
+    $lbl.AutoSize = $true
+    $txt = New-Object System.Windows.Forms.TextBox
+    $txt.Location     = New-Object System.Drawing.Point(12, 42)
+    $txt.Size         = New-Object System.Drawing.Size(340, 22)
+    $txt.PasswordChar = [char]0x2022
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text         = 'OK'
+    $btnOk.Location     = New-Object System.Drawing.Point(168, 90)
+    $btnOk.Size         = New-Object System.Drawing.Size(84, 28)
+    $btnOk.BackColor    = [System.Drawing.Color]::FromArgb(0, 0, 128)
+    $btnOk.ForeColor    = [System.Drawing.Color]::White
+    $btnOk.DialogResult = 'OK'
+    $dlg.AcceptButton   = $btnOk
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text         = 'Abbrechen'
+    $btnCancel.Location     = New-Object System.Drawing.Point(262, 90)
+    $btnCancel.Size         = New-Object System.Drawing.Size(90, 28)
+    $btnCancel.DialogResult = 'Cancel'
+    $dlg.CancelButton       = $btnCancel
+    $dlg.Controls.AddRange(@($lbl, $txt, $btnOk, $btnCancel))
+    if ($dlg.ShowDialog() -eq 'OK' -and $txt.Text.Length -gt 0) {
+        $ss = New-Object System.Security.SecureString
+        foreach ($c in $txt.Text.ToCharArray()) { $ss.AppendChar($c) }
+        $ss.MakeReadOnly()
+        $txt.Clear()
+        return $ss
+    }
+    return $null
+}
+
 function Start-Gui {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -322,7 +377,7 @@ function Start-Gui {
     $lblTitle.AutoSize  = $true
 
     $lblSub = New-Object System.Windows.Forms.Label
-    $lblSub.Text      = 'AUTHORIZED PERSONNEL ONLY   //   XTS-AES-256   //   FEDERAL ENCRYPTION STANDARD   //   HANDLE WITH CARE'
+    $lblSub.Text      = 'XTS-AES-256   //   Windows BitLocker Volume Encryption'
     $lblSub.Font      = $fontSub
     $lblSub.ForeColor = $clrSubtitle
     $lblSub.Location  = New-Object System.Drawing.Point(14, 34)
@@ -483,20 +538,101 @@ function Start-Gui {
         try {
             $selectedAction = [string]$cmbAction.SelectedItem
             $selectedDrive  = if ($cmbDrive.SelectedItem) { [string]$cmbDrive.SelectedItem } else { $null }
-
             $lblStatus.Text = "EXECUTING >> $($selectedAction.ToUpper())  :  $selectedDrive"
 
             if ($selectedAction -eq 'status') {
                 $progressTimer.Stop()
                 $txtOutput.Text = & $fnGetStatusText
                 $lblStatus.Text = 'STATUS QUERY  //  OK  //  ' + (Get-Date -Format 'HH:mm:ss')
-            }
-            elseif ($selectedAction -eq 'progress') {
+
+            } elseif ($selectedAction -eq 'progress') {
                 $txtOutput.Text = & $fnGetProgressText
                 $progressTimer.Start()
                 $lblStatus.Text = 'MONITORING  //  AUTO-UPDATE ACTIVE'
-            }
-            else {
+
+            } elseif ($selectedAction -eq 'encrypt') {
+                if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
+                $pw = Show-PasswordDialog -Headline 'Verschluesselung' -DriveLabel $selectedDrive
+                if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
+
+                $mountPt  = $selectedDrive + ':'
+                $recovDir = if ([System.IO.Path]::IsPathRooted($RecoveryKeyOutputDir)) {
+                                $RecoveryKeyOutputDir
+                            } else {
+                                Join-Path (Get-Location) $RecoveryKeyOutputDir
+                            }
+
+                $rs = [runspacefactory]::CreateRunspace()
+                $rs.Open()
+                $rs.SessionStateProxy.SetVariable('_mp',  $mountPt)
+                $rs.SessionStateProxy.SetVariable('_pw',  $pw)
+                $rs.SessionStateProxy.SetVariable('_dir', $recovDir)
+                $bgPs = [System.Management.Automation.PowerShell]::Create()
+                $bgPs.Runspace = $rs
+                [void]$bgPs.AddScript({
+                    Import-Module BitLocker -ErrorAction SilentlyContinue
+                    $vol = Get-BitLockerVolume -MountPoint $_mp
+                    if ($vol.ProtectionStatus -eq 'On') { return 'ALREADY_PROTECTED' }
+                    Enable-BitLocker -MountPoint $_mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $_pw
+                    $r   = Add-BitLockerKeyProtector -MountPoint $_mp -RecoveryPasswordProtector
+                    $rec = $r.KeyProtector | Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } | Select-Object -First 1
+                    if ($rec) {
+                        if (-not (Test-Path $_dir)) { New-Item $_dir -ItemType Directory | Out-Null }
+                        $ts = Get-Date -Format 'yyyyMMdd-HHmmss'
+                        $f  = Join-Path $_dir "Recovery-$($_mp.Replace(':',''))-$ts.txt"
+                        @("MountPoint: $_mp", "CreatedAt: $(Get-Date -Format o)",
+                          "RecoveryPassword: $($rec.RecoveryPassword)",
+                          "KeyProtectorId: $($rec.KeyProtectorId)") | Set-Content -Path $f -Encoding UTF8
+                        return "Recovery gespeichert in: $f"
+                    }
+                    return 'Gestartet'
+                })
+                $bgHandle = $bgPs.BeginInvoke()
+                $script:_bgPs     = $bgPs
+                $script:_bgHandle = $bgHandle
+                $script:_bgRs     = $rs
+                $script:_bgMount  = $mountPt
+
+                $jobPoll = New-Object System.Windows.Forms.Timer
+                $jobPoll.Interval = 1500
+                $jobPoll.Add_Tick({
+                    if (-not $script:_bgHandle.IsCompleted) {
+                        $lblStatus.Text = "ENCRYPTING $($script:_bgMount)  //  " + (Get-Date -Format 'HH:mm:ss')
+                        return
+                    }
+                    $jobPoll.Stop()
+                    try {
+                        $out = $script:_bgPs.EndInvoke($script:_bgHandle)
+                        if ($script:_bgPs.HadErrors) {
+                            $err = ($script:_bgPs.Streams.Error | Select-Object -First 1).ToString()
+                            $lblStatus.Text = "ERROR  //  $err"
+                            [System.Windows.Forms.MessageBox]::Show($err, 'ENIGMA  -  ERROR', 'OK', 'Error') | Out-Null
+                        } else {
+                            $txtOutput.Text = ">> VERSCHLUESSELUNG GESTARTET: $($script:_bgMount)`r`n$out`r`n`r`n" + (& $fnGetProgressText)
+                            $lblStatus.Text = "ENCRYPT STARTED  //  " + (Get-Date -Format 'HH:mm:ss')
+                            $progressTimer.Start()
+                        }
+                    } catch {
+                        $lblStatus.Text = 'ERROR  //  ' + $_.Exception.Message
+                    } finally {
+                        $script:_bgRs.Dispose()
+                        $script:_bgPs.Dispose()
+                    }
+                    $jobPoll.Dispose()
+                }.GetNewClosure())
+                $jobPoll.Start()
+                $lblStatus.Text = "STARTING ENCRYPT  $mountPt  //  BITTE WARTEN..."
+                $progressTimer.Stop()
+
+            } elseif ($selectedAction -eq 'unlock') {
+                if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
+                $pw = Show-PasswordDialog -Headline 'Entsperren' -DriveLabel $selectedDrive
+                if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
+                Unlock-BitLocker -MountPoint ($selectedDrive + ':') -Password $pw
+                $txtOutput.Text = ">> ENTSPERRT: $selectedDrive`r`n`r`n" + (& $fnGetStatusText)
+                $lblStatus.Text = "UNLOCKED  $selectedDrive  //  " + (Get-Date -Format 'HH:mm:ss')
+
+            } else {
                 $progressTimer.Stop()
                 & $fnInvokeAction -RequestedAction $selectedAction -RequestedDriveLetter $selectedDrive
                 $txtOutput.Text = ">> OPERATION COMPLETE: $($selectedAction.ToUpper()) [$selectedDrive]`r`n`r`n" + (& $fnGetStatusText)
