@@ -617,6 +617,7 @@ function Start-Gui {
     $fnGetStatusText       = ${function:Get-StatusText}
     $fnGetBitLockerLetters = ${function:Get-BitLockerLetters}
     $fnInvokeAction        = ${function:Invoke-RequestedAction}
+    $fnShowPasswordDialog  = ${function:Show-PasswordDialog}
 
     # ── Timer: Fortschritt ────────────────────────────────────────────────
     $progressTimer = New-Object System.Windows.Forms.Timer
@@ -674,7 +675,7 @@ function Start-Gui {
 
             } elseif ($selectedAction -eq 'encrypt') {
                 if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
-                $pw = Show-PasswordDialog -Headline 'Verschluesselung' -DriveLabel $selectedDrive -RequireMinLength
+                $pw = & $fnShowPasswordDialog -Headline 'Verschluesselung' -DriveLabel $selectedDrive -RequireMinLength
                 if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
 
                 $mountPt  = $selectedDrive + ':'
@@ -766,7 +767,7 @@ function Start-Gui {
 
             } elseif ($selectedAction -eq 'unlock') {
                 if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
-                $pw = Show-PasswordDialog -Headline 'Entsperren' -DriveLabel $selectedDrive
+                $pw = & $fnShowPasswordDialog -Headline 'Entsperren' -DriveLabel $selectedDrive
                 if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
                 Unlock-BitLocker -MountPoint ($selectedDrive + ':') -Password $pw
                 $txtOutput.Text = ">> ENTSPERRT: $selectedDrive`r`n`r`n" + (& $fnGetStatusText)
