@@ -58,7 +58,9 @@ function Watch-Progress {
 
     if ([string]::IsNullOrWhiteSpace($Letter)) {
         Write-Host ''
-        $volumes = Get-BitLockerVolume | Where-Object { $_.EncryptionPercentage -gt 0 -and $_.EncryptionPercentage -lt 100 }
+        $volumes = Get-BitLockerVolume | Where-Object {
+            $_.VolumeStatus -in @('EncryptionInProgress', 'DecryptionInProgress', 'EncryptionPaused', 'DecryptionPaused')
+        }
         if (-not $volumes) {
             Write-Host 'Kein Laufwerk wird gerade ver-/entschluesselt.'
             return
@@ -85,6 +87,48 @@ function Watch-Progress {
         }
 
         Start-Sleep -Seconds 3
+    }
+}
+
+function Get-SecureStringLength {
+    param([System.Security.SecureString]$Value)
+
+    if ($null -eq $Value) {
+        return 0
+    }
+
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr).Length
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Assert-PasswordPolicy {
+    param(
+        [System.Security.SecureString]$Password,
+        [int]$MinLength = 8
+    )
+
+    $length = Get-SecureStringLength -Value $Password
+    if ($length -lt $MinLength) {
+        throw "Passwort zu kurz: mindestens $MinLength Zeichen erforderlich."
+    }
+}
+
+function Assert-EncryptionStarted {
+    param([string]$MountPoint)
+
+    $state = Get-BitLockerVolume -MountPoint $MountPoint
+    $started = (
+        $state.ProtectionStatus -eq 'On' -or
+        $state.VolumeStatus -in @('EncryptionInProgress', 'EncryptionPaused', 'FullyEncrypted')
+    )
+
+    if (-not $started) {
+        throw "Verschluesselung fuer $MountPoint wurde nicht gestartet. Bitte Fehlermeldungen oben pruefen."
     }
 }
 
@@ -186,14 +230,17 @@ function Encrypt-Drive {
     }
 
     if ($mountPoint -eq 'C:') {
-        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest
+        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -TpmProtector -SkipHardwareTest -ErrorAction Stop
     }
     else {
         if ($null -eq $Password) {
             $Password = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
         }
-        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $Password
+        Assert-PasswordPolicy -Password $Password
+        Enable-BitLocker -MountPoint $mountPoint -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $Password -ErrorAction Stop
     }
+
+    Assert-EncryptionStarted -MountPoint $mountPoint
 
     $recovery = Add-RecoveryPasswordProtector -MountPoint $mountPoint
     Save-RecoveryInfo -MountPoint $mountPoint -Path $RecoveryKeyOutputDir -RecoveryProtector $recovery
@@ -287,41 +334,116 @@ function Start-InteractiveMenu {
     }
 }
 
+function Get-PasswordStrengthInfo {
+    param([string]$Password)
+
+    $length = $Password.Length
+    $score = 0
+    if ($length -ge 8)  { $score++ }
+    if ($length -ge 12) { $score++ }
+    if ($Password -cmatch '[A-Z]')      { $score++ }
+    if ($Password -cmatch '[a-z]')      { $score++ }
+    if ($Password -match '\d')         { $score++ }
+    if ($Password -match '[^a-zA-Z0-9]'){ $score++ }
+
+    $label = 'Sehr schwach'
+    $color = [System.Drawing.Color]::FromArgb(192, 0, 0)
+    switch ($score) {
+        { $_ -le 2 } { $label = 'Sehr schwach'; $color = [System.Drawing.Color]::FromArgb(192, 0, 0); break }
+        3            { $label = 'Schwach';      $color = [System.Drawing.Color]::FromArgb(204, 102, 0); break }
+        4            { $label = 'Mittel';       $color = [System.Drawing.Color]::FromArgb(160, 140, 0); break }
+        5            { $label = 'Stark';        $color = [System.Drawing.Color]::FromArgb(0, 128, 0); break }
+        default      { $label = 'Sehr stark';   $color = [System.Drawing.Color]::FromArgb(0, 90, 180) }
+    }
+
+    [PSCustomObject]@{
+        Length  = $length
+        Score   = $score
+        Label   = $label
+        Color   = $color
+        IsValid = ($length -ge 8)
+    }
+}
+
 function Show-PasswordDialog {
-    param([string]$Headline = 'Passwort eingeben', [string]$DriveLabel = '')
+    param(
+        [string]$Headline = 'Passwort eingeben',
+        [string]$DriveLabel = '',
+        [switch]$RequireMinLength
+    )
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     $dlg = New-Object System.Windows.Forms.Form
     $dlg.Text            = "ENIGMA  -  $Headline"
-    $dlg.Size            = New-Object System.Drawing.Size(380, 180)
+    $dlg.Size            = New-Object System.Drawing.Size(420, 250)
     $dlg.StartPosition   = 'CenterScreen'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox     = $false
     $dlg.MinimizeBox     = $false
     $dlg.BackColor       = [System.Drawing.Color]::FromArgb(212, 208, 200)
+
     $lbl = New-Object System.Windows.Forms.Label
     $lbl.Text     = if ($DriveLabel) { "Passwort fuer Laufwerk ${DriveLabel}:" } else { 'Passwort:' }
-    $lbl.Location = New-Object System.Drawing.Point(12, 18)
+    $lbl.Location = New-Object System.Drawing.Point(12, 16)
     $lbl.AutoSize = $true
+
     $txt = New-Object System.Windows.Forms.TextBox
-    $txt.Location     = New-Object System.Drawing.Point(12, 42)
-    $txt.Size         = New-Object System.Drawing.Size(340, 22)
-    $txt.PasswordChar = [char]0x2022
+    $txt.Location     = New-Object System.Drawing.Point(12, 40)
+    $txt.Size         = New-Object System.Drawing.Size(382, 22)
+    $txt.PasswordChar = '*'
+
+    $lblStrength = New-Object System.Windows.Forms.Label
+    $lblStrength.Text     = 'Qualitaet: Sehr schwach'
+    $lblStrength.Location = New-Object System.Drawing.Point(12, 68)
+    $lblStrength.AutoSize = $true
+    $lblStrength.ForeColor = [System.Drawing.Color]::FromArgb(192, 0, 0)
+
+    $bar = New-Object System.Windows.Forms.ProgressBar
+    $bar.Location = New-Object System.Drawing.Point(12, 90)
+    $bar.Size     = New-Object System.Drawing.Size(382, 16)
+    $bar.Minimum  = 0
+    $bar.Maximum  = 6
+
+    $lblHint = New-Object System.Windows.Forms.Label
+    $lblHint.Text     = if ($RequireMinLength) { 'Mindestens 8 Zeichen erforderlich.' } else { 'Empfohlen: mindestens 8 Zeichen.' }
+    $lblHint.Location = New-Object System.Drawing.Point(12, 114)
+    $lblHint.AutoSize = $true
+
     $btnOk = New-Object System.Windows.Forms.Button
     $btnOk.Text         = 'OK'
-    $btnOk.Location     = New-Object System.Drawing.Point(168, 90)
+    $btnOk.Location     = New-Object System.Drawing.Point(210, 160)
     $btnOk.Size         = New-Object System.Drawing.Size(84, 28)
     $btnOk.BackColor    = [System.Drawing.Color]::FromArgb(0, 0, 128)
     $btnOk.ForeColor    = [System.Drawing.Color]::White
     $btnOk.DialogResult = 'OK'
     $dlg.AcceptButton   = $btnOk
+
     $btnCancel = New-Object System.Windows.Forms.Button
     $btnCancel.Text         = 'Abbrechen'
-    $btnCancel.Location     = New-Object System.Drawing.Point(262, 90)
+    $btnCancel.Location     = New-Object System.Drawing.Point(304, 160)
     $btnCancel.Size         = New-Object System.Drawing.Size(90, 28)
     $btnCancel.DialogResult = 'Cancel'
     $dlg.CancelButton       = $btnCancel
-    $dlg.Controls.AddRange(@($lbl, $txt, $btnOk, $btnCancel))
+
+    $updateStrength = {
+        $info = Get-PasswordStrengthInfo -Password $txt.Text
+        $lblStrength.Text = "Qualitaet: $($info.Label)"
+        $lblStrength.ForeColor = $info.Color
+        $bar.Value = [math]::Max($bar.Minimum, [math]::Min($bar.Maximum, $info.Score))
+
+        if ($RequireMinLength) {
+            $btnOk.Enabled = ($txt.Text.Length -gt 0 -and $info.IsValid)
+        }
+        else {
+            $btnOk.Enabled = ($txt.Text.Length -gt 0)
+        }
+    }.GetNewClosure()
+
+    $txt.Add_TextChanged($updateStrength)
+    $dlg.Controls.AddRange(@($lbl, $txt, $lblStrength, $bar, $lblHint, $btnOk, $btnCancel))
+    & $updateStrength
+
     if ($dlg.ShowDialog() -eq 'OK' -and $txt.Text.Length -gt 0) {
         $ss = New-Object System.Security.SecureString
         foreach ($c in $txt.Text.ToCharArray()) { $ss.AppendChar($c) }
@@ -552,7 +674,7 @@ function Start-Gui {
 
             } elseif ($selectedAction -eq 'encrypt') {
                 if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
-                $pw = Show-PasswordDialog -Headline 'Verschluesselung' -DriveLabel $selectedDrive
+                $pw = Show-PasswordDialog -Headline 'Verschluesselung' -DriveLabel $selectedDrive -RequireMinLength
                 if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
 
                 $mountPt  = $selectedDrive + ':'
@@ -571,9 +693,27 @@ function Start-Gui {
                 $bgPs.Runspace = $rs
                 [void]$bgPs.AddScript({
                     Import-Module BitLocker -ErrorAction SilentlyContinue
+
+                    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($_pw)
+                    try {
+                        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                        if ($plain.Length -lt 8) {
+                            throw 'Passwort zu kurz: mindestens 8 Zeichen erforderlich.'
+                        }
+                    }
+                    finally {
+                        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                    }
+
                     $vol = Get-BitLockerVolume -MountPoint $_mp
                     if ($vol.ProtectionStatus -eq 'On') { return 'ALREADY_PROTECTED' }
-                    Enable-BitLocker -MountPoint $_mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $_pw
+                    Enable-BitLocker -MountPoint $_mp -EncryptionMethod XtsAes256 -UsedSpaceOnly -PasswordProtector -Password $_pw -ErrorAction Stop
+
+                    $check = Get-BitLockerVolume -MountPoint $_mp
+                    if (-not ($check.ProtectionStatus -eq 'On' -or $check.VolumeStatus -in @('EncryptionInProgress', 'EncryptionPaused', 'FullyEncrypted'))) {
+                        throw "Verschluesselung fuer $_mp wurde nicht gestartet."
+                    }
+
                     $r   = Add-BitLockerKeyProtector -MountPoint $_mp -RecoveryPasswordProtector
                     $rec = $r.KeyProtector | Where-Object { $_.KeyProtectorType -eq 'RecoveryPassword' } | Select-Object -First 1
                     if ($rec) {
