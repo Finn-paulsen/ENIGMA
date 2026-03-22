@@ -335,16 +335,16 @@ function Start-InteractiveMenu {
 }
 
 function Get-PasswordStrengthInfo {
-    param([string]$Password)
+    param([string]$Candidate)
 
-    $length = $Password.Length
+    $length = $Candidate.Length
     $score = 0
     if ($length -ge 8)  { $score++ }
     if ($length -ge 12) { $score++ }
-    if ($Password -cmatch '[A-Z]')      { $score++ }
-    if ($Password -cmatch '[a-z]')      { $score++ }
-    if ($Password -match '\d')         { $score++ }
-    if ($Password -match '[^a-zA-Z0-9]'){ $score++ }
+    if ($Candidate -cmatch '[A-Z]')      { $score++ }
+    if ($Candidate -cmatch '[a-z]')      { $score++ }
+    if ($Candidate -match '\d')         { $score++ }
+    if ($Candidate -match '[^a-zA-Z0-9]'){ $score++ }
 
     $label = 'Sehr schwach'
     $color = [System.Drawing.Color]::FromArgb(192, 0, 0)
@@ -429,7 +429,7 @@ function Show-PasswordDialog {
     $fnPasswordStrength = ${function:Get-PasswordStrengthInfo}
 
     $updateStrength = {
-        $info = & $fnPasswordStrength -Password $txt.Text
+        $info = & $fnPasswordStrength -Candidate $txt.Text
         $lblStrength.Text = "Qualitaet: $($info.Label)"
         $lblStrength.ForeColor = $info.Color
         $bar.Value = [math]::Max($bar.Minimum, [math]::Min($bar.Maximum, $info.Score))
@@ -731,37 +731,40 @@ function Start-Gui {
                     return 'Gestartet'
                 })
                 $bgHandle = $bgPs.BeginInvoke()
-                $script:_bgPs     = $bgPs
-                $script:_bgHandle = $bgHandle
-                $script:_bgRs     = $rs
-                $script:_bgMount  = $mountPt
+
+                $bgPsLocal = $bgPs
+                $bgHandleLocal = $bgHandle
+                $bgRsLocal = $rs
+                $bgMountLocal = [string]$mountPt
 
                 $jobPoll = New-Object System.Windows.Forms.Timer
                 $jobPoll.Interval = 1500
                 $jobPoll.Add_Tick({
-                    if (-not $script:_bgHandle.IsCompleted) {
-                        $lblStatus.Text = "ENCRYPTING $($script:_bgMount)  //  " + (Get-Date -Format 'HH:mm:ss')
-                        return
-                    }
-                    $jobPoll.Stop()
                     try {
-                        $out = $script:_bgPs.EndInvoke($script:_bgHandle)
-                        if ($script:_bgPs.HadErrors) {
-                            $err = ($script:_bgPs.Streams.Error | Select-Object -First 1).ToString()
+                        if (-not $bgHandleLocal.IsCompleted) {
+                            $lblStatus.Text = "ENCRYPTING $bgMountLocal  //  " + (Get-Date -Format 'HH:mm:ss')
+                            return
+                        }
+
+                        $jobPoll.Stop()
+                        $out = $bgPsLocal.EndInvoke($bgHandleLocal)
+                        if ($bgPsLocal.HadErrors) {
+                            $err = ($bgPsLocal.Streams.Error | Select-Object -First 1).ToString()
                             $lblStatus.Text = "ERROR  //  $err"
                             [System.Windows.Forms.MessageBox]::Show($err, 'ENIGMA  -  ERROR', 'OK', 'Error') | Out-Null
                         } else {
-                            $txtOutput.Text = ">> VERSCHLUESSELUNG GESTARTET: $($script:_bgMount)`r`n$out`r`n`r`n" + (& $fnGetProgressText)
+                            $txtOutput.Text = ">> VERSCHLUESSELUNG GESTARTET: $bgMountLocal`r`n$out`r`n`r`n" + (& $fnGetProgressText)
                             $lblStatus.Text = "ENCRYPT STARTED  //  " + (Get-Date -Format 'HH:mm:ss')
                             $progressTimer.Start()
                         }
                     } catch {
                         $lblStatus.Text = 'ERROR  //  ' + $_.Exception.Message
+                        $jobPoll.Stop()
                     } finally {
-                        $script:_bgRs.Dispose()
-                        $script:_bgPs.Dispose()
+                        if ($bgRsLocal) { $bgRsLocal.Dispose() }
+                        if ($bgPsLocal) { $bgPsLocal.Dispose() }
+                        $jobPoll.Dispose()
                     }
-                    $jobPoll.Dispose()
                 }.GetNewClosure())
                 $jobPoll.Start()
                 $lblStatus.Text = "STARTING ENCRYPT  $mountPt  //  BITTE WARTEN..."
