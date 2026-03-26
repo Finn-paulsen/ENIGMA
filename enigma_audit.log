@@ -1,2 +1,5 @@
 [2026-03-26T12:23:41.725941] SUCCESS  | AUTH_SET             | Master password configured
 [2026-03-26T12:23:41.730116] SUCCESS  | START                | System: linux
+[2026-03-26T12:46:13.735412] INFO     | EXIT                 | Application closed
+[2026-03-26T12:46:30.828586] SUCCESS  | AUTH_SUCCESS         | Master password verified
+[2026-03-26T12:46:30.831603] SUCCESS  | START                | System: linux

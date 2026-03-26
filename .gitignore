@@ -1,3 +1,12 @@
+# Security & Authentication - SENSIBLE DATA!
+.enigma_auth
+.enigma_auth.lock
+enigma_audit.log
+
+# Certificates & Backups
+certificates/
+backups/
+
 # Python
 __pycache__/
 *.py[cod]
