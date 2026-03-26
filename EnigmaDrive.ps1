@@ -281,13 +281,31 @@ function Lock-Drive {
 }
 
 function Decrypt-Drive {
-    param([string]$Letter)
+    param(
+        [string]$Letter,
+        [System.Security.SecureString]$Password = $null
+    )
 
     if ([string]::IsNullOrWhiteSpace($Letter)) {
         $Letter = Prompt-DriveLetter -Prompt 'Laufwerksbuchstabe fuer Entschluesselung'
     }
 
     $mountPoint = Get-MountPoint -Letter $Letter
+
+    $volume = Get-BitLockerVolume -MountPoint $mountPoint
+    if ($volume.VolumeStatus -in @('FullyDecrypted', 'DecryptionInProgress', 'DecryptionPaused')) {
+        Write-Host "Volume $mountPoint ist bereits entschluesselt oder wird gerade entschluesselt."
+        return
+    }
+
+    if ($volume.LockStatus -eq 'Locked') {
+        Write-Host "Laufwerk ist gesperrt. Entsperren vor Entschluesselung..."
+        if ($null -eq $Password) {
+            $Password = Read-Host -AsSecureString -Prompt "Passwort fuer $mountPoint eingeben"
+        }
+        Unlock-BitLocker -MountPoint $mountPoint -Password $Password
+        Write-Host "Laufwerk entsperrt: $mountPoint"
+    }
 
     Disable-BitLocker -MountPoint $mountPoint
     Write-Host "Entschluesselung gestartet fuer: $mountPoint"
@@ -777,6 +795,23 @@ function Start-Gui {
                 Unlock-BitLocker -MountPoint ($selectedDrive + ':') -Password $pw
                 $txtOutput.Text = ">> ENTSPERRT: $selectedDrive`r`n`r`n" + (& $fnGetStatusText)
                 $lblStatus.Text = "UNLOCKED  $selectedDrive  //  " + (Get-Date -Format 'HH:mm:ss')
+
+            } elseif ($selectedAction -eq 'decrypt') {
+                if ([string]::IsNullOrWhiteSpace($selectedDrive)) { throw 'Bitte zuerst ein Laufwerk auswaehlen.' }
+                $mountPt = $selectedDrive + ':'
+                $vol = Get-BitLockerVolume -MountPoint $mountPt
+                if ($vol.VolumeStatus -in @('FullyDecrypted', 'DecryptionInProgress', 'DecryptionPaused')) {
+                    throw "Volume $mountPt ist bereits entschluesselt oder wird gerade entschluesselt."
+                }
+                if ($vol.LockStatus -eq 'Locked') {
+                    $pw = & $fnShowPasswordDialog -Headline 'Entsperren vor Entschluesselung' -DriveLabel $selectedDrive
+                    if ($null -eq $pw) { $lblStatus.Text = 'ABGEBROCHEN'; return }
+                    Unlock-BitLocker -MountPoint $mountPt -Password $pw
+                }
+                Disable-BitLocker -MountPoint $mountPt
+                $txtOutput.Text = ">> ENTSCHLUESSELUNG GESTARTET: $selectedDrive`r`n`r`n" + (& $fnGetProgressText)
+                $lblStatus.Text = "DECRYPT STARTED  $selectedDrive  //  " + (Get-Date -Format 'HH:mm:ss')
+                $progressTimer.Start()
 
             } else {
                 $progressTimer.Stop()
