@@ -1,81 +1,134 @@
-# ENIGMA
+# ENIGMA v2.5
 
-Ein sicheres Laufwerk-Verschluesselungsprogramm solltest du **nicht** mit einer selbst erfundenen Kryptografie bauen.
-Dieses Projekt nutzt deshalb bewaehrte, auditierte Kryptografie ueber Windows BitLocker (XTS-AES-256) und stellt eine eigene CLI darueber bereit.
+**Cross-Platform Enterprise Encryption Manager**
+
+Ein professionelles, sicheres Laufwerk-Verschluesselungsprogramm basierend auf bewährter, auditierter Kryptografie:
+- **Windows**: BitLocker (XTS-AES-256)
+- **Linux**: LUKS2 (AES-256)
 
 ## Features
 
-- Verschluesselungsstatus von Laufwerken anzeigen
-- Laufwerke mit BitLocker verschluesseln (`XtsAes256`)
-- Laufwerke entsperren und sperren
-- Entschluesselung starten
-- Recovery-Key lokal in eine Datei exportieren
-- Interaktives Menue, wenn kein Parameter angegeben wird
-- Optionale GUI (`-Gui`)
+### Core Functionality
+✓ Encryption-Status anzeigen  
+✓ Laufwerke verschluesseln (vollautomatisch)  
+✓ Volumes entsperren/sperren  
+✓ Entschluesselung starten  
+✓ Recovery-Keys automatisch exportiert  
+✓ Audit-Logging aller Operationen  
+
+### Security
+✓ Starke Passwort-Zwangsvalidierung (12+ Zeichen, mixed case, numbers, symbols)  
+✓ XTS-AES-256 Verschluesselung (militärischer Standard)  
+✓ Automatische Fehlerbehandlung  
+✓ Sichere Passwort-Eingabe (masked)  
+✓ Bestätigungen vor kritischen Operationen  
+
+### User Experience
+✓ Moderne Terminal-UI mit Rich-Library  
+✓ Progress-Anzeigen für lange Operationen  
+✓ farbcodierte Status-Messages  
+✓ Plattformübergreifend (Windows/Linux)  
+✓ Automatische Abhängigkeits-Installation
 
 ## Voraussetzungen
 
-- Windows Pro/Enterprise/Education (BitLocker verfgbar)
+### Windows
+- Windows 10/11 Pro, Enterprise oder Education (BitLocker verfügbar)
 - PowerShell 5.1+ oder PowerShell 7+
-- Administratorrechte beim Ausfuehren
+- Administratorrechte
+
+### Linux
+- Any Linux distribution (Ubuntu, Fedora, Arch, etc.)
+- Python 3.8+
+- `sudo` Zugriff
+- cryptsetup wird **automatisch installiert** wenn nicht vorhanden
+
+### Alle Plattformen
+- Python 3.8+
+- Internet-Verbindung beim ersten Start (zum Installieren von Abhängigkeiten)
 
 ## Schnellstart
 
-1. PowerShell als Administrator starten.
-2. In den Projektordner wechseln.
-3. Beispiele ausfuehren:
+### Installation
+```bash
+cd /path/to/ENIGMA
 
-```powershell
-# Variante A: Voller Befehl (klassisch)
-.\EnigmaDrive.ps1 -Action status
+# Windows PowerShell (Admin)
+python enigma.py
 
-# Datenlaufwerk L: verschluesseln
-.\EnigmaDrive.ps1 -Action encrypt -DriveLetter L -RecoveryKeyOutputDir .\recovery
-
-# Variante B: Kurzform mit Positionsparametern
-.\EnigmaDrive.ps1 status
-.\EnigmaDrive.ps1 encrypt L
-
-# Variante C: Interaktives Menue (ohne Parameter)
-.\EnigmaDrive.ps1
-
-# Variante D: GUI starten
-.\EnigmaDrive.ps1 -Gui
-
-# Oder GUI per Doppelklick starten
-.\Start-Enigma.cmd
-
-# Weitere Beispiele
-.\EnigmaDrive.ps1 -Action encrypt -DriveLetter D -RecoveryKeyOutputDir .\recovery
-
-# Laufwerk D: entsperren
-.\EnigmaDrive.ps1 -Action unlock -DriveLetter D
-
-# Laufwerk D: sperren
-.\EnigmaDrive.ps1 -Action lock -DriveLetter D
-
-# Entschluesselung starten
-.\EnigmaDrive.ps1 -Action decrypt -DriveLetter D
+# Linux (sudo für Verschlüsselung notwendig)
+sudo python3 enigma.py
 ```
 
-## Sicherheits-Hinweise
+### Erste Schritte
 
-- Verwende fuer sensible Daten ein **starkes Passwort** und sichere den Recovery-Key offline.
-- Erstelle mindestens ein zusaetzliches Backup der Recovery-Datei.
-- Fuer Systemlaufwerke (`C:`) nutzt das Skript den TPM-Protector.
-- Dieses Projekt ist eine Verwaltungs-CLI fuer BitLocker, kein neuer Kryptografie-Algorithmus.
+1. **Programm starten**
+   ```bash
+   sudo python3 enigma.py  # Linux
+   python enigma.py         # Windows
+   ```
 
-## Typische Fehler
+2. **Hauptmenü wird angezeigt**
+   - Status anzeigen
+   - Laufwerk verschlüsseln
+   - Volume entsperren/sperren
+   - Entschlüsselung starten
+   - Audit-Log ansehen
 
-- Falsch: `EnigmaDrive.ps1 Action status`
-- Richtig: `.\EnigmaDrive.ps1 -Action status`
-- In PowerShell muss aus dem aktuellen Ordner mit `.\` aufgerufen werden.
+3. **Laufwerk wählen** und Aktion ausführen
+   - Passwort-Validierung (mindestens 12 Zeichen mit Uppercase, Lowercase, Zahlen, Sonderzeichen)
+   - Bestätigung vor kritischen Operationen
+   - Progress-Anzeige bei langen Operationen
+
+### Beispiele
+
+**Windows - BitLocker:**
+```
+1. Menü starten
+2. "Encrypt Drive" wählen
+3. Laufwerk und Passwort eingeben
+4. BitLocker Verschlüsselung startet
+```
+
+**Linux - LUKS:**
+```
+1. Menü starten (mit sudo!)
+2. "Encrypt Drive" wählen
+3. Gerät (/dev/sdX), Name und Passwort eingeben
+4. LUKS2 Container wird erstellt und gemountet
+```
+
+## Sicherheits-Features
+
+### Passwort-Validierung
+- **Minimum**: 12 Zeichen
+- **Erforderlich**: Uppercase + Lowercase + Zahlen + Sonderzeichen
+- **Wiederholung**: Passwort muss bestätigt werden
+- **Maskiert**: Eingabe wird nicht sichtbar gemacht
+
+### Verschlüsselung
+- **Windows**: XTS-AES-256 (BitLocker Industry Standard)
+- **Linux**: LUKS2 mit AES-256 (Open Source Standard)
+- Beide verwenden militärische Verschlüsselungsstandards
+
+### Sicherheits-Checks
+✓ Root/Admin-Privilegien erzwungen  
+✓ Bestätigungen vor kritischen Operationen  
+✓ Audit-Logging aller Aktionen (`enigma_audit.log`)  
+✓ Keine Passwörter in Log-Dateien  
+✓ Automatische Fehlerbehandlung
+
+### Best Practices
+
+- **Starkes Passwort**: Verwende ein zufälliges 16+ Zeichen Passwort
+- **Backups**: Sichere Recovery-Keys offline
+- **TPM**: Windows nutzt TPM automatisch für C: Laufwerk
+- **Regelmäßige Updates**: System und enigma aktuell halten
 
 ## Wichtiger Hinweis
 
-Absolute Sicherheit gibt es nicht. Praktisch erreichst du hohe Sicherheit durch:
-
-- bewaehrte Algorithmen
-- sauberes Schluesselmanagement
-- sichere Backups
-- aktuelles System-Patching
+Absolute Sicherheit existiert nicht. Praktische Sicherheit erreicht man durch:
+- ✓ Bewährte, auditierte Verschlüsselungsalgorithmen
+- ✓ Starke Passwörter und sicheres Schlüsselmanagement
+- ✓ Regelmäßige Backups und Offline-Storage von Recovery-Keys
+- ✓ Aktuelles Patching des gesamten Systems
