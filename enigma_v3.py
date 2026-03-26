@@ -542,15 +542,28 @@ class LUKSManager:
                 console=console
             ) as progress:
                 progress.add_task("Unmounting...", total=None)
-                subprocess.run(f"umount {mount_path}", shell=True, capture_output=True)
+                result = subprocess.run(f"umount -f {mount_path}", shell=True, capture_output=True)
+                if result.returncode != 0:
+                    console.print(f"[yellow]Warning: Could not unmount {mount_path}[/yellow]")
+                else:
+                    console.print(f"[green]Unmounted {mount_path}[/green]")
                 
                 progress.add_task("Closing LUKS container...", total=None)
-                subprocess.run(
-                    f"cryptsetup luksClose {name}",
+                result = subprocess.run(
+                    f"sudo cryptsetup luksClose {name}",
                     shell=True,
                     capture_output=True,
                     timeout=10
                 )
+                if result.returncode != 0:
+                    console.print(f"[red]Warning: Could not close {name}[/red]")
+                    console.print(f"[yellow]Trying with force...[/yellow]")
+                    subprocess.run(
+                        f"sudo cryptsetup luksClose {name} --force",
+                        shell=True,
+                        capture_output=True,
+                        timeout=10
+                    )
             
             log_action("LOCK_DRIVE", f"Name: {name}", "SUCCESS")
             return True
@@ -562,6 +575,35 @@ class LUKSManager:
     def decrypt_drive(device: str) -> bool:
         """Permanently remove LUKS encryption."""
         try:
+            # Check if device is mounted
+            result = subprocess.run(
+                f"mount | grep {device}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                console.print(f"[yellow]Device {device} is mounted. Unmounting...[/yellow]")
+                mount_points = result.stdout.strip().split('\n')
+                for line in mount_points:
+                    if device in line:
+                        mount_path = line.split()[2]
+                        subprocess.run(f"umount -f {mount_path}", shell=True, capture_output=True)
+                        console.print(f"[yellow]Unmounted {mount_path}[/yellow]")
+            
+            # Close any open LUKS containers first
+            result = subprocess.run(
+                "cryptsetup status " + device,
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                console.print("[yellow]Found open LUKS container, closing...[/yellow]")
+                # Extract mapper name from cryptsetup status
+                subprocess.run(f"cryptsetup luksClose {device}", shell=True, capture_output=True)
+            
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[bold red]{task.description}"),
@@ -569,7 +611,7 @@ class LUKSManager:
             ) as progress:
                 progress.add_task("Erasing LUKS header (irreversible)...", total=None)
                 result = subprocess.run(
-                    f"cryptsetup luksErase {device} --force",
+                    f"sudo cryptsetup luksErase {device} --force",
                     shell=True,
                     capture_output=True,
                     timeout=30
@@ -654,14 +696,15 @@ def main_menu_linux():
             "[4] Secure Wipe Device",
             "[5] Decrypt & Wipe (Full Destroy)",
             "[6] Generate Certificate",
-            "[7] View Audit Log",
-            "[8] Exit"
+            "[7] Device Diagnostics",
+            "[8] View Audit Log",
+            "[9] Exit"
         ]
         
         for item in menu_items:
             console.print(f"  {item}")
         
-        choice = Prompt.ask("\n[cyan]▶ Select[/cyan]", choices=["1", "2", "3", "4", "5", "6", "7", "8"])
+        choice = Prompt.ask("\n[cyan]▶ Select[/cyan]", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"])
         
         if choice == "1":
             console.clear()
@@ -813,6 +856,113 @@ def main_menu_linux():
         elif choice == "7":
             console.clear()
             show_header()
+            
+            console.print("[cyan]Device Diagnostics[/cyan]\n")
+            
+            console.print("[yellow]Available Devices:[/yellow]")
+            for idx, dev in enumerate(devices, 1):
+                console.print(f"  {idx}. {dev['name']}")
+            
+            device = Prompt.ask("[cyan]Device to diagnose[/cyan]")
+            
+            console.print(f"\n[cyan]Running diagnostics for {device}...[/cyan]\n")
+            
+            # Check if mounted
+            result = subprocess.run(
+                f"mount | grep {device}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            table = Table(title=f"Diagnostics for {device}", box=box.ROUNDED)
+            table.add_column("Check", style="cyan")
+            table.add_column("Status", style="white")
+            
+            # Device exists
+            if os.path.exists(device):
+                table.add_row("Device exists", "[green]✓ Yes[/green]")
+            else:
+                table.add_row("Device exists", "[red]✗ No[/red]")
+            
+            # Mounted status
+            if result.returncode == 0:
+                mount_info = result.stdout.strip()
+                table.add_row("Mounted", f"[yellow]✓ Yes[/yellow]\n{mount_info}")
+            else:
+                table.add_row("Mounted", "[green]✗ No (good for operations)[/green]")
+            
+            # LUKS status
+            result = subprocess.run(
+                f"sudo cryptsetup status {device}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode == 0:
+                table.add_row("LUKS encrypted", "[yellow]✓ Yes[/yellow]")
+            else:
+                table.add_row("LUKS encrypted", "[green]✗ No[/green]")
+            
+            # Permissions
+            result = subprocess.run(
+                f"ls -l {device}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                table.add_row("Readable", "[green]✓ Yes[/green]")
+            else:
+                table.add_row("Readable", "[red]✗ No[/red]")
+            
+            # Device info
+            result = subprocess.run(
+                f"lsblk -bo SIZE {device}",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                size = result.stdout.strip()
+                if size and size.isdigit():
+                    table.add_row("Size readable", f"[green]✓ {DiskInfo.format_size(int(size))}[/green]")
+                else:
+                    table.add_row("Size readable", "[yellow]⚠ Could not read[/yellow]")
+            
+            # Write permission
+            result = subprocess.run(
+                f"touch {device}_test_write 2>/dev/null && rm {device}_test_write 2>/dev/null",
+                shell=True,
+                capture_output=True
+            )
+            
+            result_write = subprocess.run(
+                f"sudo dd if=/dev/zero of={device} bs=1 count=1 2>/dev/null",
+                shell=True,
+                capture_output=True
+            )
+            
+            if result_write.returncode == 0:
+                table.add_row("Writable", "[green]✓ Yes (sudo)[/green]")
+            else:
+                table.add_row("Writable", "[red]✗ May need permissions[/red]")
+            
+            console.print(table)
+            
+            console.print("\n[yellow]Recommendation:[/yellow]")
+            if result.returncode != 0:
+                console.print("✓ Device is not mounted - safe to operate on")
+            else:
+                console.print("[red]⚠ Device is MOUNTED - unmount before operations![/red]")
+                console.print(f"[cyan]Run:[/cyan] sudo umount -f {device}")
+            
+            input("\nPress Enter...")
+        
+        elif choice == "8":
+            console.clear()
+            show_header()
             if AUDIT_LOG.exists():
                 with open(AUDIT_LOG) as f:
                     log_content = f.read()
@@ -822,7 +972,7 @@ def main_menu_linux():
             
             input("\nPress Enter...")
         
-        elif choice == "8":
+        elif choice == "9":
             console.print("[dim]Goodbye![/dim]")
             log_action("EXIT", "Application closed", "INFO")
             break
